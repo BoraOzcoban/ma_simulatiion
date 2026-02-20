@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useAppStore } from '../store/AppStore';
 
 const formatPrice = (value: number) =>
-  new Intl.NumberFormat('en-US', {
+  new Intl.NumberFormat('tr-TR', {
     style: 'currency',
     currency: 'USD',
     minimumFractionDigits: 2,
@@ -59,7 +59,7 @@ export function PriceTicker() {
           onClick={() => dispatch({ type: 'TOGGLE_AUTO' })}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800"
         >
-          {state.autoPaused ? 'Activate Automatic Changes' : 'Stop Automatic Changes'}
+          {state.autoPaused ? 'Otomatik Değişimleri Başlat' : 'Otomatik Değişimleri Durdur'}
         </button>
       </div>
 
@@ -78,14 +78,14 @@ export function PriceTicker() {
               setPrice();
             }
           }}
-          placeholder="Set price"
+          placeholder="Fiyat belirle"
           type="number"
           min="0"
           step="0.01"
-          className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 outline-none ring-cyan-500 focus:ring dark:border-slate-700"
+          className="w-full rounded-lg border border-slate-300 bg-transparent px-2.5 py-1.5 text-sm outline-none ring-cyan-500 focus:ring dark:border-slate-700"
         />
-        <button onClick={setPrice} className="rounded-lg bg-cyan-600 px-4 py-2 font-medium text-white hover:bg-cyan-500">
-          Set Price
+        <button onClick={setPrice} className="rounded-lg bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-cyan-500">
+          Fiyatı Ayarla
         </button>
       </div>
     </section>

@@ -3,11 +3,11 @@ import type { AppState, Order, OrderLevel, Scenario, ShareholderStake } from '..
 import { createBaselineFinancials, estimatePriceMovePct, getSharesOutstanding, simulateQuarter } from '../lib/finance';
 
 const seedNews = [
-  'Astorium board evaluates strategic merger alternatives.',
-  'Activist investors push for stronger cash discipline.',
-  'Sector peers report mixed demand in enterprise hardware.',
-  'Rating agency places Astorium debt on watch with negative outlook.',
-  'Rumors suggest two private-equity consortia preparing bids.'
+  'Astorium yönetimi stratejik birleşme alternatiflerini değerlendiriyor.',
+  'Aktivist yatırımcılar daha sıkı nakit disiplini talep ediyor.',
+  'Sektör şirketleri kurumsal donanım talebinde karışık seyir bildiriyor.',
+  'Kredi derecelendirme kuruluşu Astorium borcunu negatif izlemeye aldı.',
+  'İki özel sermaye konsorsiyumunun teklif hazırlığında olduğu konuşuluyor.'
 ];
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -103,6 +103,35 @@ function matchBidAgainstAsks(asks: OrderLevel[], bidPrice: number, bidLots: numb
   };
 }
 
+function matchAskAgainstBids(bids: OrderLevel[], askPrice: number, askLots: number) {
+  const nextBids = bids
+    .map((level) => ({ ...level }))
+    .sort((a, b) => b.price - a.price);
+  const fills: Array<{ price: number; lots: number }> = [];
+  let remainingLots = askLots;
+
+  for (const level of nextBids) {
+    if (remainingLots <= 0 || level.price < askPrice) {
+      break;
+    }
+
+    const fillLots = Math.min(level.lots, remainingLots);
+    if (fillLots <= 0) {
+      continue;
+    }
+
+    level.lots -= fillLots;
+    remainingLots -= fillLots;
+    fills.push({ price: level.price, lots: fillLots });
+  }
+
+  return {
+    fills,
+    remainingLots,
+    bids: nextBids.filter((level) => level.lots > 0)
+  };
+}
+
 function transferOwnershipFromRetail(
   ownership: ShareholderStake[],
   bidderId: string | undefined,
@@ -117,9 +146,9 @@ function transferOwnershipFromRetail(
   let cashSpentUsd = 0;
 
   for (const fill of fills) {
-    const notional = fill.lots * LOT_SIZE_SHARES * fill.price;
-    const marketCap = fill.price * sharesOutstanding;
-    transferredPct += (notional / marketCap) * 100;
+    const sharesFilled = fill.lots * LOT_SIZE_SHARES;
+    const notional = sharesFilled * fill.price;
+    transferredPct += (sharesFilled / sharesOutstanding) * 100;
     cashSpentUsd += notional;
   }
 
@@ -129,15 +158,13 @@ function transferOwnershipFromRetail(
     return { ownership, transferredPct: 0, cashSpentUsd: 0 };
   }
 
-  const cashTransfer = Math.min(cashSpentUsd, bidder.cashUsd);
-  const cashCoverage = cashSpentUsd > 0 ? cashTransfer / cashSpentUsd : 0;
-  const transfer = Math.min(transferredPct * cashCoverage, retail.shares);
+  const transfer = Math.min(transferredPct, retail.shares);
   if (transfer <= 0) {
     return { ownership, transferredPct: 0, cashSpentUsd: 0 };
   }
 
   const transferRatio = transferredPct > 0 ? transfer / transferredPct : 0;
-  const effectiveCashTransfer = round2(cashTransfer * transferRatio);
+  const effectiveCashTransfer = round2(cashSpentUsd * transferRatio);
 
   return {
     transferredPct: round4(transfer),
@@ -154,7 +181,7 @@ function transferOwnershipFromRetail(
         return {
           ...holder,
           shares: round4(holder.shares + transfer),
-          cashUsd: round2(Math.max(0, holder.cashUsd - effectiveCashTransfer))
+          cashUsd: round2(holder.cashUsd - effectiveCashTransfer)
         };
       }
       return holder;
@@ -230,18 +257,118 @@ function transferByManualOwnershipEdit(
   };
 }
 
+function resolveRestingOrdersAfterPriceMove(
+  baseBook: { bids: OrderLevel[]; asks: OrderLevel[] },
+  manualOrders: Order[],
+  ownership: ShareholderStake[]
+) {
+  let bids = baseBook.bids.map((level) => ({ ...level }));
+  let asks = baseBook.asks.map((level) => ({ ...level }));
+  let nextOwnership = ownership;
+  let lastTradePrice: number | null = null;
+  const nextManualOrders: Order[] = [];
+  const transferNews: string[] = [];
+
+  for (const order of manualOrders) {
+    if (order.side !== 'bid') {
+      const match = matchAskAgainstBids(bids, order.price, order.lots);
+      bids = match.bids;
+
+      const fillLots = order.lots - match.remainingLots;
+      if (fillLots > 0) {
+        const latestFill = match.fills[match.fills.length - 1];
+        if (latestFill) {
+          lastTradePrice = latestFill.price;
+        }
+        transferNews.push(`${fillLots.toLocaleString('tr-TR')} lotluk satış emri gerçekleşti.`);
+      }
+
+      if (match.remainingLots > 0) {
+        nextManualOrders.push({ ...order, lots: match.remainingLots });
+      }
+      continue;
+    }
+
+    const match = matchBidAgainstAsks(asks, order.price, order.lots);
+    asks = match.asks;
+
+    const fillLots = order.lots - match.remainingLots;
+    if (fillLots > 0) {
+      const latestFill = match.fills[match.fills.length - 1];
+      if (latestFill) {
+        lastTradePrice = latestFill.price;
+      }
+      const { ownership: updatedOwnership, transferredPct, cashSpentUsd } = transferOwnershipFromRetail(
+        nextOwnership,
+        order.bidderId,
+        match.fills
+      );
+      nextOwnership = updatedOwnership;
+
+      const bidderName = nextOwnership.find((holder) => holder.id === order.bidderId)?.name ?? order.bidderId ?? 'Bilinmeyen';
+      if (transferredPct > 0) {
+        transferNews.push(
+          `${bidderName}, ${fillLots.toLocaleString('tr-TR')} lotluk alış emri gerçekleştirdi; Bireysel'den %${transferredPct.toFixed(
+            4
+          )} pay aldı, harcanan tutar: $${cashSpentUsd.toLocaleString('tr-TR')}.`
+        );
+      }
+    }
+
+    if (match.remainingLots > 0) {
+      nextManualOrders.push({ ...order, lots: match.remainingLots });
+    }
+  }
+
+  const orderBook = mergeOrders(
+    {
+      bids,
+      asks
+    },
+    nextManualOrders
+  );
+
+  return {
+    orderBook,
+    manualOrders: nextManualOrders,
+    ownership: nextOwnership,
+    transferNews,
+    lastTradePrice
+  };
+}
+
+function buildFinancialsNews(prev: AppState['financials'], next: AppState['financials'], scenario: Scenario): string {
+  const revenueDeltaPct = prev.income.revenue !== 0 ? ((next.income.revenue - prev.income.revenue) / prev.income.revenue) * 100 : 0;
+  const netIncomeDelta = next.income.netIncome - prev.income.netIncome;
+  const cashDelta = next.cashFlow.endingCash - prev.cashFlow.endingCash;
+
+  const scenarioLabel: Record<Scenario, string> = {
+    'Very Pessimistic': 'Çok Kötümser',
+    Pessimistic: 'Kötümser',
+    Neutral: 'Nötr',
+    Optimistic: 'İyimser',
+    'Very Optimistic': 'Çok İyimser'
+  };
+
+  return `Finansal güncelleme (${scenarioLabel[scenario]}): Gelir %${round2(revenueDeltaPct).toLocaleString(
+    'tr-TR'
+  )} değişti, net kâr ${round2(netIncomeDelta).toLocaleString('tr-TR')} Mn USD, dönem sonu nakit ${round2(cashDelta).toLocaleString(
+    'tr-TR'
+  )} Mn USD değişti.`;
+}
+
 const initialPrice = 12.4;
 const baselineFinancials = createBaselineFinancials();
 const initialOwnership: ShareholderStake[] = [
-  { id: 'retail', name: 'Retail (Küçük Yatırımcı Bloku)', shares: 40, cashUsd: 0 },
+  { id: 'retail', name: 'Bireysel (Küçük Yatırımcı Bloku)', shares: 40, cashUsd: 0 },
   { id: 'aktivist-fon', name: 'C Bank Serbest Fon', shares: 2, cashUsd: 1_500_000_000 },
-  { id: 'harvard-endowment', name: 'Harvard Endowment', shares: 5, cashUsd: 50_000_000_000 },
+  { id: 'harvard-endowment', name: 'Harvard Vakfı', shares: 5, cashUsd: 50_000_000_000 },
   { id: 'turkiye-varlik-fonu', name: 'Türkiye Varlık Fonu', shares: 10, cashUsd: 250_000_000_000 },
   { id: 'katar-varlik-fonu', name: 'Katar Varlık Fonu', shares: 7, cashUsd: 475_000_000_000 },
   { id: 'norvec-varlik-fonu', name: 'Norveç Varlık Fonu', shares: 5, cashUsd: 1_500_000_000_000 },
   { id: 'astorium-yonetim-kurulu', name: 'Astorium', shares: 11, cashUsd: 1_200_000_000 },
-  { id: 'titan-capital', name: 'Titan Capital', shares: 2, cashUsd: 8_000_000_000 },
-  { id: 'aurora-group', name: 'Aurora Group', shares: 0, cashUsd: 6_000_000_000 }
+  { id: 'titan-capital', name: 'Titan Sermaye', shares: 2, cashUsd: 8_000_000_000 },
+  { id: 'aurora-group', name: 'Aurora Grup', shares: 0, cashUsd: 6_000_000_000 }
 ];
 
 const initialState: AppState = {
@@ -320,18 +447,23 @@ function reducer(state: AppState, action: Action): AppState {
     case 'SET_PRICE': {
       const prev = state.price;
       const next = round2(Math.max(0.01, action.price));
-      const diff = round2(next - prev);
-      const pct = prev !== 0 ? round2((diff / prev) * 100) : 0;
       const baseBook = generateBaseOrderBook(next);
-      const orderBook = mergeOrders(baseBook, state.manualOrders);
+      const resolved = resolveRestingOrdersAfterPriceMove(baseBook, state.manualOrders, state.ownership);
+      const finalPrice = round2(resolved.lastTradePrice ?? next);
+      const diff = round2(finalPrice - prev);
+      const pct = prev !== 0 ? round2((diff / prev) * 100) : 0;
+      const orderBook = mergeOrders(generateBaseOrderBook(finalPrice), resolved.manualOrders);
 
       return {
         ...state,
-        price: next,
+        price: finalPrice,
         lastChangeAmount: diff,
         lastChangePct: pct,
-        priceHistory: [...state.priceHistory.slice(-59), next],
-        orderBook
+        priceHistory: [...state.priceHistory.slice(-59), finalPrice],
+        orderBook,
+        manualOrders: resolved.manualOrders,
+        ownership: resolved.ownership,
+        news: [...resolved.transferNews, ...state.news]
       };
     }
     case 'ADD_NEWS': {
@@ -379,18 +511,28 @@ function reducer(state: AppState, action: Action): AppState {
           .slice(0, ORDERBOOK_RENDER_DEPTH);
 
         const fillLots = order.lots - remainingBidLots;
-        const bidderName = state.ownership.find((holder) => holder.id === order.bidderId)?.name ?? order.bidderId ?? 'Unknown';
+        const bidderName = state.ownership.find((holder) => holder.id === order.bidderId)?.name ?? order.bidderId ?? 'Bilinmeyen';
         const transferNews =
           fillLots > 0 && transferredPct > 0
             ? [
-                `${bidderName} buy bid realized ${fillLots.toLocaleString('en-US')} lots, gained ${transferredPct.toFixed(
+                `${bidderName}, ${fillLots.toLocaleString('tr-TR')} lotluk alış emri gerçekleştirdi; Bireysel'den %${transferredPct.toFixed(
                   4
-                )}% from Retail, cash spent: $${cashSpentUsd.toLocaleString('en-US')}.`
+                )} pay aldı, harcanan tutar: $${cashSpentUsd.toLocaleString('tr-TR')}.`
               ]
             : [];
 
+        const lastFill = match.fills[match.fills.length - 1];
+        const tradePrice = round2(lastFill?.price ?? state.price);
+        const priceDiff = round2(tradePrice - state.price);
+        const pricePct = state.price !== 0 ? round2((priceDiff / state.price) * 100) : 0;
+        const priceHistory = lastFill ? [...state.priceHistory.slice(-59), tradePrice] : state.priceHistory;
+
         return {
           ...state,
+          price: tradePrice,
+          lastChangeAmount: priceDiff,
+          lastChangePct: pricePct,
+          priceHistory,
           manualOrders,
           ownership,
           news: [...transferNews, ...state.news],
@@ -401,22 +543,43 @@ function reducer(state: AppState, action: Action): AppState {
         };
       }
 
-      const manualOrders = [...state.manualOrders, order];
+      const match = matchAskAgainstBids(state.orderBook.bids, order.price, order.lots);
+      const remainingAskLots = match.remainingLots;
+      const manualOrders =
+        remainingAskLots > 0
+          ? [...state.manualOrders, { ...order, lots: remainingAskLots }]
+          : [...state.manualOrders];
+      const fillLots = order.lots - remainingAskLots;
+      const tradeNews = fillLots > 0 ? [`${fillLots.toLocaleString('tr-TR')} lotluk satış emri gerçekleşti.`] : [];
+
       const asksMap = new Map<number, number>();
       for (const level of state.orderBook.asks) {
         asksMap.set(level.price, (asksMap.get(level.price) ?? 0) + level.lots);
       }
-      asksMap.set(order.price, (asksMap.get(order.price) ?? 0) + order.lots);
+      if (remainingAskLots > 0) {
+        asksMap.set(order.price, (asksMap.get(order.price) ?? 0) + remainingAskLots);
+      }
       const asks = Array.from(asksMap.entries())
         .map(([price, lots]) => ({ price, lots }))
         .sort((a, b) => a.price - b.price)
         .slice(0, ORDERBOOK_RENDER_DEPTH);
 
+      const lastFill = match.fills[match.fills.length - 1];
+      const tradePrice = round2(lastFill?.price ?? state.price);
+      const priceDiff = round2(tradePrice - state.price);
+      const pricePct = state.price !== 0 ? round2((priceDiff / state.price) * 100) : 0;
+      const priceHistory = lastFill ? [...state.priceHistory.slice(-59), tradePrice] : state.priceHistory;
+
       return {
         ...state,
+        price: tradePrice,
+        lastChangeAmount: priceDiff,
+        lastChangePct: pricePct,
+        priceHistory,
         manualOrders,
+        news: [...tradeNews, ...state.news],
         orderBook: {
-          ...state.orderBook,
+          bids: match.bids.slice(0, ORDERBOOK_RENDER_DEPTH),
           asks
         }
       };
@@ -428,22 +591,29 @@ function reducer(state: AppState, action: Action): AppState {
       };
     case 'SIMULATE_FINANCIALS':
       {
+        const prevFinancials = state.financials;
         const nextFinancials = simulateQuarter(state.financials, state.scenario);
+        const financialsNews = buildFinancialsNews(prevFinancials, nextFinancials, state.scenario);
         const movePct = estimatePriceMovePct(state.financials, nextFinancials, state.scenario);
         const prev = state.price;
         const next = round2(Math.max(0.01, prev * (1 + movePct / 100)));
-        const diff = round2(next - prev);
+        const resolved = resolveRestingOrdersAfterPriceMove(generateBaseOrderBook(next), state.manualOrders, state.ownership);
+        const finalPrice = round2(resolved.lastTradePrice ?? next);
+        const diff = round2(finalPrice - prev);
         const pct = prev !== 0 ? round2((diff / prev) * 100) : 0;
-        const orderBook = mergeOrders(generateBaseOrderBook(next), state.manualOrders);
+        const orderBook = mergeOrders(generateBaseOrderBook(finalPrice), resolved.manualOrders);
 
         return {
           ...state,
           financials: nextFinancials,
-          price: next,
+          price: finalPrice,
           lastChangeAmount: diff,
           lastChangePct: pct,
-          priceHistory: [...state.priceHistory.slice(-59), next],
-          orderBook
+          priceHistory: [...state.priceHistory.slice(-59), finalPrice],
+          orderBook,
+          manualOrders: resolved.manualOrders,
+          ownership: resolved.ownership,
+          news: [financialsNews, ...resolved.transferNews, ...state.news]
         };
       }
     case 'SET_OWNERSHIP_SHARES': {

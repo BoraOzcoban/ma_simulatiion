@@ -1,12 +1,12 @@
 import { useAppStore } from '../store/AppStore';
 
 const shortNames: Record<string, string> = {
-  retail: 'Retail',
+  retail: 'Bireysel',
   'aktivist-fon': 'C Bank',
-  'harvard-endowment': 'Harvard',
+  'harvard-endowment': 'Harvard Vakfı',
   'turkiye-varlik-fonu': 'TR VF',
-  'katar-varlik-fonu': 'Qatar VF',
-  'norvec-varlik-fonu': 'Norway VF',
+  'katar-varlik-fonu': 'Katar VF',
+  'norvec-varlik-fonu': 'Norveç VF',
   'astorium-yonetim-kurulu': 'Astorium',
   'titan-capital': 'Titan',
   'aurora-group': 'Aurora'
@@ -20,7 +20,7 @@ const holdingsLabelIds = new Set([
 ]);
 
 const fmtCashCompact = (value: number) =>
-  new Intl.NumberFormat('en-US', {
+  new Intl.NumberFormat('tr-TR', {
     notation: 'compact',
     maximumFractionDigits: 2
   }).format(value);
@@ -55,7 +55,7 @@ export function HeaderOwnershipMini() {
             <span className="text-slate-400">%</span>
           </div>
           <p className="mt-1 text-[10px] text-slate-400">
-            {holdingsLabelIds.has(holder.id) ? 'Holdings' : 'Cash'}: ${fmtCashCompact(holder.cashUsd)}
+            {holdingsLabelIds.has(holder.id) ? 'Varlık' : 'Nakit'}: ${fmtCashCompact(holder.cashUsd)}
           </p>
         </div>
       ))}

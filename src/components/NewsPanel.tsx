@@ -15,7 +15,7 @@ export function NewsPanel() {
 
   return (
     <aside className="rounded-2xl bg-white p-4 shadow-panel dark:bg-slate-900">
-      <h2 className="text-lg font-semibold">News</h2>
+      <h2 className="text-lg font-semibold">Haberler</h2>
       <div className="mt-3 flex gap-2">
         <input
           value={headline}
@@ -25,14 +25,14 @@ export function NewsPanel() {
               addHeadline();
             }
           }}
-          placeholder="Add headline"
+          placeholder="Haber başlığı ekle"
           className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm outline-none ring-cyan-500 focus:ring dark:border-slate-700"
         />
         <button
           onClick={addHeadline}
           className="rounded-lg bg-cyan-600 px-3 py-2 text-sm font-medium text-white hover:bg-cyan-500"
         >
-          Add
+          Ekle
         </button>
       </div>
       <ul className="mt-4 max-h-[70vh] space-y-2 overflow-y-auto pr-2">

@@ -131,7 +131,7 @@ export function createBaselineFinancials(): Financials {
     income,
     cashFlow,
     balance,
-    periodLabel: '2025 Baseline'
+    periodLabel: '2025 Baz Dönem'
   };
 }
 
@@ -271,7 +271,7 @@ export function simulateQuarter(current: Financials, scenario: Scenario): Financ
     income,
     cashFlow,
     balance,
-    periodLabel: 'Current (Simulated)'
+    periodLabel: 'Güncel (Simüle)'
   };
 }
 
